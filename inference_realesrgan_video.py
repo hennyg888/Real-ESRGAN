@@ -44,13 +44,14 @@ def get_sub_video(args, num_process, process_idx):
     part_time = duration // num_process
     print(f'duration: {duration}, part_time: {part_time}')
     os.makedirs(osp.join(args.output, f'{args.video_name}_inp_tmp_videos'), exist_ok=True)
-    out_path = osp.join(args.output, f'{args.video_name}_inp_tmp_videos', f'{process_idx:03d}.mp4')
-    cmd = [
-        args.ffmpeg_bin, f'-i {args.input}', '-ss', f'{part_time * process_idx}',
-        f'-to {part_time * (process_idx + 1)}' if process_idx != num_process - 1 else '', '-async 1', out_path, '-y'
-    ]
-    print(' '.join(cmd))
-    subprocess.call(' '.join(cmd), shell=True)
+    out_path = osp.join(args.output, f'{args.video_name}_inp_tmp_videos', f'{process_idx}.mp4')
+    if not args.keyframe_split:
+        cmd = [
+            args.ffmpeg_bin, f'-i {args.input}', '-ss', f'{part_time * process_idx}',
+            f'-to {part_time * (process_idx + 1)}' if process_idx != num_process - 1 else '', '-async 1', out_path, '-y'
+        ]
+        print(' '.join(cmd))
+        subprocess.call(' '.join(cmd), shell=True)
     return out_path
 
 
@@ -291,6 +292,34 @@ def run(args):
     if num_process == 1:
         inference_video(args, video_save_path)
         return
+    
+    #splitting video:
+    if args.keyframe_split:
+        print(f"splitting video into {num_process} approximately equal pieces on keyframes")
+        meta = get_video_meta_info(args.input)
+        duration = int(meta['nb_frames'] / meta['fps'])
+        part_time = duration // num_process
+        print(f'duration: {duration}, part_time: {part_time}')
+        os.makedirs(osp.join(args.output, f'{args.video_name}_inp_tmp_videos'), exist_ok=True)
+
+        seg_time_str = ""
+        for i in range(1, num_process):
+            seg_time_str += str(i * part_time)
+            if not i == num_process - 1:
+                seg_time_str += ","
+        print("seg_time_str: ",seg_time_str)
+
+        cmd = [
+            args.ffmpeg_bin, 
+            f'-i {args.input}',
+            '-c copy',
+            '-map 0',
+            '-f segment',
+            '-segment_times', seg_time_str,
+            f'{args.output}/{args.video_name}_inp_tmp_videos/%d.mp4'
+        ]
+        print(' '.join(cmd))
+        subprocess.call(' '.join(cmd), shell=True)
 
     ctx = torch.multiprocessing.get_context('spawn')
     pool = ctx.Pool(num_process)
@@ -317,6 +346,7 @@ def run(args):
     ]
     print(' '.join(cmd))
     subprocess.call(cmd)
+
     shutil.rmtree(osp.join(args.output, f'{args.video_name}_out_tmp_videos'))
     if osp.exists(osp.join(args.output, f'{args.video_name}_inp_tmp_videos')):
         shutil.rmtree(osp.join(args.output, f'{args.video_name}_inp_tmp_videos'))
@@ -358,6 +388,7 @@ def main():
     parser.add_argument('--ffmpeg_bin', type=str, default='ffmpeg', help='The path to ffmpeg')
     parser.add_argument('--extract_frame_first', action='store_true')
     parser.add_argument('--num_process_per_gpu', type=int, default=1)
+    parser.add_argument('--keyframe_split', action='store_true')
 
     parser.add_argument(
         '--alpha_upsampler',
